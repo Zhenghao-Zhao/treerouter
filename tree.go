@@ -11,7 +11,7 @@ type node struct {
 
 	// each node has at most one param child
 	paramChild *node
-	isParam    bool
+	wildChild  *node
 	paramNames []string
 }
 
@@ -50,7 +50,7 @@ func longestCommonString(s1, s2 string) int {
 func getFirstParam(path string) (int, int) {
 	start, end := -1, -1
 	for i := range path {
-		if path[i] == ':' {
+		if path[i] == ':' || path[i] == '*' {
 			start = i
 			for i < len(path) && path[i] != '/' {
 				i++
@@ -77,6 +77,7 @@ func (t *node) addNode(path string, handlers ...Chainable) {
 				handlers:   t.handlers,
 				children:   t.children,
 				paramChild: t.paramChild,
+				wildChild:  t.wildChild,
 				paramNames: t.paramNames,
 			}
 
@@ -110,11 +111,6 @@ func (t *node) addNode(path string, handlers ...Chainable) {
 				continue
 			}
 
-			if t.paramChild != nil && path[0] == ':' {
-				t = t.paramChild
-				continue
-			}
-
 			t.insertChild(path, handlers, paramNames)
 			return
 		}
@@ -138,37 +134,54 @@ func (t *node) insertChild(path string, handlers []Chainable, paramNames []strin
 			return
 		}
 
-		if start == end {
-			panic("Malformed url path: missing parameter name")
-		}
-		paramNames = append(paramNames, path[start+1:end])
-
-		// add paramNode
-		paramNode := &node{path: ":", isParam: true}
+		var dynamNode, priorNode *node
 
 		if start > 0 {
-			priorPath := path[:start]
-			priorNode := &node{
-				path: priorPath,
+			priorNode = &node{
+				path: path[:start],
 			}
-			priorNode.addChild(paramNode)
+		}
+
+		if path[start] == ':' && start+1 >= end {
+			panic("Malformed url path: missing parameter name")
+		}
+
+		if path[start] == '*' && end != len(path) {
+			panic("Malformed url path: * must be at the end of path")
+		}
+
+		if path[start] == ':' {
+			dynamNode = &node{path: ":"}
+			paramNames = append(paramNames, path[start+1:end])
+		} else {
+			dynamNode = &node{path: "*"}
+		}
+
+		if priorNode != nil {
+			priorNode.addChild(dynamNode)
 			t.addChild(priorNode)
 		} else {
-			t.addChild(paramNode)
+			t.addChild(dynamNode)
 		}
+
 		if end == len(path) {
-			paramNode.paramNames = paramNames
-			paramNode.handlers = handlers
+			dynamNode.paramNames = paramNames
+			dynamNode.handlers = handlers
 			return
 		}
-		t = paramNode
+		t = dynamNode
 		path = path[end:]
 	}
 }
 
 func (t *node) addChild(n *node) {
-	if n.isParam {
+	if n.path == ":" {
 		t.paramChild = n
+		return
+	}
+
+	if n.path == "*" {
+		t.wildChild = n
 		return
 	}
 	if t.children == nil {
@@ -239,6 +252,19 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 		// if no matching segments found try matching parameter nodes
 		if t.paramChild != nil {
 			return t.paramChild.matchRoute(path, paramValues)
+		}
+
+		if t.wildChild != nil {
+			paramNames := t.wildChild.paramNames
+			params := make(map[string]string)
+			for i, name := range paramNames {
+				params[name] = paramValues[i]
+			}
+			params["*"] = path
+			return &routeValue{
+				params:       params,
+				handlerChain: NewHandlerChain(t.wildChild.handlers...),
+			}
 		}
 	}
 

@@ -76,6 +76,32 @@ func TestRouteFormats(t *testing.T) {
 		{request: createRequest(http.MethodGet, server.URL+"/users/"), expected: "users"},
 		{request: createRequest(http.MethodGet, server.URL+"/profiles"), expected: "profiles"},
 		{request: createRequest(http.MethodGet, server.URL+"/posts"), expected: "posts"},
+		{request: createRequest(http.MethodGet, server.URL+"/posts?id=1"), expected: "posts"},
+	}
+
+	test(t, testCases)
+}
+
+func TestMixedRoutes(t *testing.T) {
+	router := NewRouter()
+	groupUser := router.NewGroup("user")
+
+	groupUser.GET("/*", func(w http.ResponseWriter, r *http.Request) {
+		param := GetParam(r, "*")
+		w.Write([]byte(param))
+	})
+
+	groupUser.GET("/name", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("john doe"))
+	})
+
+	s := httptest.NewServer(router)
+	defer s.Close()
+
+	testCases := []testCase{
+		{request: createRequest(http.MethodGet, s.URL+"/user/orange/blue"), expected: "orange/blue"},
+		{request: createRequest(http.MethodGet, s.URL+"/user/red"), expected: "red"},
+		{request: createRequest(http.MethodGet, s.URL+"/user/name"), expected: "john doe"},
 	}
 
 	test(t, testCases)
