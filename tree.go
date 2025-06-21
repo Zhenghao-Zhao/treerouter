@@ -208,16 +208,19 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 		}
 		paramValues = append(paramValues, path[:start])
 		if start == len(path) {
-			paramNames := t.paramNames
-			params := make(map[string]string)
-			for i, name := range paramNames {
-				params[name] = paramValues[i]
-			}
+			if len(t.handlers) > 0 {
+				paramNames := t.paramNames
+				params := make(map[string]string)
+				for i, name := range paramNames {
+					params[name] = paramValues[i]
+				}
 
-			return &routeValue{
-				params:       params,
-				handlerChain: NewHandlerChain(t.handlers...),
+				return &routeValue{
+					params:       params,
+					handlerChain: NewHandlerChain(t.handlers...),
+				}
 			}
+			return nil
 		}
 		path = path[start:]
 		if k, exists := t.children[path[0]]; exists {
@@ -230,16 +233,19 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 	if l <= len(path) && path[:l] == t.path {
 		path = path[l:]
 		if path == "" {
-			paramNames := t.paramNames
-			params := make(map[string]string)
-			for i, name := range paramNames {
-				params[name] = paramValues[i]
-			}
+			if len(t.handlers) > 0 {
+				paramNames := t.paramNames
+				params := make(map[string]string)
+				for i, name := range paramNames {
+					params[name] = paramValues[i]
+				}
 
-			return &routeValue{
-				params:       params,
-				handlerChain: NewHandlerChain(t.handlers...),
+				return &routeValue{
+					params:       params,
+					handlerChain: NewHandlerChain(t.handlers...),
+				}
 			}
+			return nil
 		}
 
 		// prioritise matching non parameter nodes first
@@ -251,7 +257,9 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 
 		// if no matching segments found try matching parameter nodes
 		if t.paramChild != nil {
-			return t.paramChild.matchRoute(path, paramValues)
+			if v := t.paramChild.matchRoute(path, paramValues); v != nil {
+				return v
+			}
 		}
 
 		if t.wildChild != nil {
