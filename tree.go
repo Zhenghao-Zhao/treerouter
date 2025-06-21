@@ -34,6 +34,11 @@ func NewNode(path string) *node {
 	}
 }
 
+type routeValue struct {
+	params       map[string]string
+	handlerChain HandlerChain
+}
+
 // returns the length of the longest common substring between s1 and s2
 func longestCommonString(s1, s2 string) int {
 	l := min(len(s1), len(s2))
@@ -46,7 +51,7 @@ func longestCommonString(s1, s2 string) int {
 	return i
 }
 
-// get the first param name in the path
+// get the first param name in the path, return the substring start and end indexes
 func getFirstParam(path string) (int, int) {
 	start, end := -1, -1
 	for i := range path {
@@ -63,34 +68,34 @@ func getFirstParam(path string) (int, int) {
 	return start, end
 }
 
-func (t *node) addNode(path string, handlers ...Chainable) {
+func (n *node) addNode(path string, handlers ...Chainable) {
 	// list of param names in the path
 	paramNames := make([]string, 0)
 
 	for {
-		l := longestCommonString(t.path, path)
+		l := longestCommonString(n.path, path)
 
 		// split node
-		if l < len(t.path) {
+		if l < len(n.path) {
 			newNode := &node{
-				path:       t.path[l:],
-				handlers:   t.handlers,
-				children:   t.children,
-				paramChild: t.paramChild,
-				wildChild:  t.wildChild,
-				paramNames: t.paramNames,
+				path:       n.path[l:],
+				handlers:   n.handlers,
+				children:   n.children,
+				paramChild: n.paramChild,
+				wildChild:  n.wildChild,
+				paramNames: n.paramNames,
 			}
 
-			t.path = t.path[:l]
-			t.children = make(map[byte]*node)
-			t.children = map[byte]*node{
+			n.path = n.path[:l]
+			n.children = make(map[byte]*node)
+			n.children = map[byte]*node{
 				newNode.path[0]: newNode,
 			}
-			t.handlers = nil
-			t.paramNames = nil
+			n.handlers = nil
+			n.paramNames = nil
 		}
 		if l < len(path) {
-			if t.path == ":" && path[0] == ':' {
+			if n.path == ":" && path[0] == ':' {
 				start, end := getFirstParam(path)
 
 				if start == -1 {
@@ -106,27 +111,37 @@ func (t *node) addNode(path string, handlers ...Chainable) {
 			}
 
 			// check if node has child matching first character of path
-			if k, exists := t.children[path[0]]; exists {
-				t = k
+			if k, exists := n.children[path[0]]; exists {
+				n = k
 				continue
 			}
 
-			t.insertChild(path, handlers, paramNames)
+			if path[0] == ':' && n.paramChild != nil {
+				n = n.paramChild
+				continue
+			}
+
+			if path[0] == '*' && n.wildChild != nil {
+				n = n.wildChild
+				break
+			}
+
+			n.insertChild(path, handlers, paramNames)
 			return
 		}
 
-		// if path matches the current node, set handlers and paramNames
-		t.handlers = handlers
-		t.paramNames = paramNames
+		// if path matches the current node, set/override handlers and paramNames
+		n.handlers = handlers
+		n.paramNames = paramNames
 		return
 	}
 }
 
-func (t *node) insertChild(path string, handlers []Chainable, paramNames []string) {
+func (n *node) insertChild(path string, handlers []Chainable, paramNames []string) {
 	for {
 		start, end := getFirstParam(path)
 		if start == -1 {
-			t.addChild(&node{
+			n.addChild(&node{
 				path:       path,
 				handlers:   handlers,
 				paramNames: paramNames,
@@ -142,26 +157,28 @@ func (t *node) insertChild(path string, handlers []Chainable, paramNames []strin
 			}
 		}
 
-		if path[start] == ':' && start+1 >= end {
+		fc := path[start]
+		if fc == ':' && start+1 >= end {
 			panic("Malformed url path: missing parameter name")
 		}
 
-		if path[start] == '*' && end != len(path) {
-			panic("Malformed url path: * must be at the end of path")
+		if fc == '*' && end != len(path) {
+			panic("Malformed url path: wildcard(*) must be at the end of path")
 		}
 
-		if path[start] == ':' {
-			dynamNode = &node{path: ":"}
+		// both param child (:) and wild child (*) uses single character path
+		dynamNode = &node{path: string(fc)}
+
+		if fc == ':' {
 			paramNames = append(paramNames, path[start+1:end])
-		} else {
-			dynamNode = &node{path: "*"}
 		}
 
+		// if there is prior path insert that node as parent node
 		if priorNode != nil {
 			priorNode.addChild(dynamNode)
-			t.addChild(priorNode)
+			n.addChild(priorNode)
 		} else {
-			t.addChild(dynamNode)
+			n.addChild(dynamNode)
 		}
 
 		if end == len(path) {
@@ -169,47 +186,43 @@ func (t *node) insertChild(path string, handlers []Chainable, paramNames []strin
 			dynamNode.handlers = handlers
 			return
 		}
-		t = dynamNode
+		n = dynamNode
 		path = path[end:]
 	}
 }
 
-func (t *node) addChild(n *node) {
-	if n.path == ":" {
-		t.paramChild = n
+func (n *node) addChild(c *node) {
+	if c.path == ":" {
+		n.paramChild = c
 		return
 	}
 
-	if n.path == "*" {
-		t.wildChild = n
+	if c.path == "*" {
+		n.wildChild = c
 		return
 	}
-	if t.children == nil {
-		t.children = make(map[byte]*node)
+	if n.children == nil {
+		n.children = make(map[byte]*node)
 	}
-	t.children[n.path[0]] = n
+	n.children[c.path[0]] = c
 }
 
-type routeValue struct {
-	params       map[string]string
-	handlerChain HandlerChain
-}
-
-func (t *node) match(path string) *routeValue {
-	return t.matchRoute(path, []string{})
+func (n *node) match(path string) *routeValue {
+	return n.matchRoute(path, []string{})
 }
 
 // match routes recursively
-func (t *node) matchRoute(path string, paramValues []string) *routeValue {
-	if t.path == ":" {
+func (n *node) matchRoute(path string, paramValues []string) *routeValue {
+	if n.path == ":" {
 		start := 0
 		for start < len(path) && path[start] != '/' {
 			start++
 		}
 		paramValues = append(paramValues, path[:start])
 		if start == len(path) {
-			if len(t.handlers) > 0 {
-				paramNames := t.paramNames
+			// making sure the node is an endpoint (n.handlers > 0)
+			if len(n.handlers) > 0 {
+				paramNames := n.paramNames
 				params := make(map[string]string)
 				for i, name := range paramNames {
 					params[name] = paramValues[i]
@@ -217,24 +230,24 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 
 				return &routeValue{
 					params:       params,
-					handlerChain: NewHandlerChain(t.handlers...),
+					handlerChain: NewHandlerChain(n.handlers...),
 				}
 			}
 			return nil
 		}
 		path = path[start:]
-		if k, exists := t.children[path[0]]; exists {
-			t = k
+		if k, exists := n.children[path[0]]; exists {
+			n = k
 		}
 	}
 
-	l := len(t.path)
-
-	if l <= len(path) && path[:l] == t.path {
+	l := len(n.path)
+	if l <= len(path) && path[:l] == n.path {
 		path = path[l:]
 		if path == "" {
-			if len(t.handlers) > 0 {
-				paramNames := t.paramNames
+			// making sure the node is an endpoint (n.handlers > 0)
+			if len(n.handlers) > 0 {
+				paramNames := n.paramNames
 				params := make(map[string]string)
 				for i, name := range paramNames {
 					params[name] = paramValues[i]
@@ -242,28 +255,29 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 
 				return &routeValue{
 					params:       params,
-					handlerChain: NewHandlerChain(t.handlers...),
+					handlerChain: NewHandlerChain(n.handlers...),
 				}
 			}
 			return nil
 		}
 
-		// prioritise matching non parameter nodes first
-		if k, exists := t.children[path[0]]; exists {
+		// prioritise matching non parameter/wildcard nodes first
+		if k, exists := n.children[path[0]]; exists {
 			if v := k.matchRoute(path, paramValues); v != nil {
 				return v
 			}
 		}
 
-		// if no matching segments found try matching parameter nodes
-		if t.paramChild != nil {
-			if v := t.paramChild.matchRoute(path, paramValues); v != nil {
+		// if no matching segments found try matching parameter nodes first
+		if n.paramChild != nil {
+			if v := n.paramChild.matchRoute(path, paramValues); v != nil {
 				return v
 			}
 		}
 
-		if t.wildChild != nil {
-			paramNames := t.wildChild.paramNames
+		// match wildcard child last as it has lowest priority
+		if n.wildChild != nil {
+			paramNames := n.wildChild.paramNames
 			params := make(map[string]string)
 			for i, name := range paramNames {
 				params[name] = paramValues[i]
@@ -271,7 +285,7 @@ func (t *node) matchRoute(path string, paramValues []string) *routeValue {
 			params["*"] = path
 			return &routeValue{
 				params:       params,
-				handlerChain: NewHandlerChain(t.wildChild.handlers...),
+				handlerChain: NewHandlerChain(n.wildChild.handlers...),
 			}
 		}
 	}
