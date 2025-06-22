@@ -5,13 +5,17 @@ import (
 )
 
 type node struct {
-	path     string
+	path string
+
+	// only endpoint node has at least one handlers
 	handlers []Chainable
 	children map[byte]*node
 
-	// each node has at most one param child
+	// each node has at most one param child and one wildcard child
 	paramChild *node
 	wildChild  *node
+
+	// only endpoint node has paramNames
 	paramNames []string
 }
 
@@ -65,7 +69,21 @@ func getFirstParam(path string) (int, int) {
 		}
 	}
 
+	if start > -1 {
+		fc := path[start]
+		if fc == ':' && start+1 >= end {
+			panic("Malformed url path: missing parameter name")
+		}
+		if fc == '*' && end != len(path) {
+			panic("Malformed url path: wildcard '*' must be at the end of path")
+		}
+	}
+
 	return start, end
+}
+
+func (n *node) isLeaf() bool {
+	return len(n.handlers) > 0
 }
 
 func (n *node) addNode(path string, handlers ...Chainable) {
@@ -95,21 +113,17 @@ func (n *node) addNode(path string, handlers ...Chainable) {
 			n.paramNames = nil
 		}
 		if l < len(path) {
-			if n.path == ":" && path[0] == ':' {
+			if path[0] == ':' {
 				start, end := getFirstParam(path)
-
-				if start == -1 {
-					panic("missing param name")
-				}
 				paramNames = append(paramNames, path[start+1:end])
 				path = path[end:]
-				if len(path) == 0 {
-					break
-				}
 			} else {
 				path = path[l:]
 			}
 
+			if len(path) == 0 {
+				break
+			}
 			// check if node has child matching first character of path
 			if k, exists := n.children[path[0]]; exists {
 				n = k
@@ -158,17 +172,9 @@ func (n *node) insertChild(path string, handlers []Chainable, paramNames []strin
 		}
 
 		fc := path[start]
-		if fc == ':' && start+1 >= end {
-			panic("Malformed url path: missing parameter name")
-		}
-
-		if fc == '*' && end != len(path) {
-			panic("Malformed url path: wildcard(*) must be at the end of path")
-		}
 
 		// both param child (:) and wild child (*) uses single character path
 		dynamNode = &node{path: string(fc)}
-
 		if fc == ':' {
 			paramNames = append(paramNames, path[start+1:end])
 		}
@@ -220,8 +226,7 @@ func (n *node) matchRoute(path string, paramValues []string) *routeValue {
 		}
 		paramValues = append(paramValues, path[:start])
 		if start == len(path) {
-			// making sure the node is an endpoint (n.handlers > 0)
-			if len(n.handlers) > 0 {
+			if n.isLeaf() {
 				paramNames := n.paramNames
 				params := make(map[string]string)
 				for i, name := range paramNames {
@@ -245,8 +250,7 @@ func (n *node) matchRoute(path string, paramValues []string) *routeValue {
 	if l <= len(path) && path[:l] == n.path {
 		path = path[l:]
 		if path == "" {
-			// making sure the node is an endpoint (n.handlers > 0)
-			if len(n.handlers) > 0 {
+			if n.isLeaf() {
 				paramNames := n.paramNames
 				params := make(map[string]string)
 				for i, name := range paramNames {
@@ -282,6 +286,8 @@ func (n *node) matchRoute(path string, paramValues []string) *routeValue {
 			for i, name := range paramNames {
 				params[name] = paramValues[i]
 			}
+
+			// set wildcard param name to "*"
 			params["*"] = path
 			return &routeValue{
 				params:       params,
