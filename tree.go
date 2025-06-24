@@ -112,7 +112,7 @@ func (n *node) addNode(path string, handlers ...Chainable) {
 			n.handlers = nil
 			n.paramNames = nil
 		}
-		if l < len(path) {
+		if l <= len(path) {
 			if path[0] == ':' {
 				start, end := getFirstParam(path)
 				paramNames = append(paramNames, path[start+1:end])
@@ -121,9 +121,10 @@ func (n *node) addNode(path string, handlers ...Chainable) {
 				path = path[l:]
 			}
 
-			if len(path) == 0 {
+			if path == "" {
 				break
 			}
+
 			// check if node has child matching first character of path
 			if k, exists := n.children[path[0]]; exists {
 				n = k
@@ -143,12 +144,9 @@ func (n *node) addNode(path string, handlers ...Chainable) {
 			n.insertChild(path, handlers, paramNames)
 			return
 		}
-
-		// if path matches the current node, set/override handlers and paramNames
-		n.handlers = handlers
-		n.paramNames = paramNames
-		return
 	}
+	n.handlers = handlers
+	n.paramNames = paramNames
 }
 
 func (n *node) insertChild(path string, handlers []Chainable, paramNames []string) {
