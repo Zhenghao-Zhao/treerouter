@@ -91,6 +91,11 @@ func TestMixedRoutes(t *testing.T) {
 		w.Write([]byte(param))
 	})
 
+	groupUser.GET("/:name/*", func(w http.ResponseWriter, r *http.Request) {
+		param := GetParam(r, "*")
+		w.Write([]byte(param))
+	})
+
 	groupUser.GET("/:name/id", func(w http.ResponseWriter, r *http.Request) {
 		paramVal := GetParam(r, "name")
 		w.Write([]byte(paramVal))
@@ -109,11 +114,11 @@ func TestMixedRoutes(t *testing.T) {
 	defer s.Close()
 
 	testCases := []testCase{
-		{request: createRequest(http.MethodGet, s.URL+"/user/orange/blue"), expected: "orange/blue"},
 		{request: createRequest(http.MethodGet, s.URL+"/user/red"), expected: "red"},
 		{request: createRequest(http.MethodGet, s.URL+"/user/johndoe/id"), expected: "johndoe"},
 		{request: createRequest(http.MethodGet, s.URL+"/user/johndoe/name"), expected: "johndoe"},
 		{request: createRequest(http.MethodGet, s.URL+"/user/name"), expected: "john doe"},
+		{request: createRequest(http.MethodGet, s.URL+"/user/name/foo"), expected: "foo"},
 	}
 
 	test(t, testCases)
