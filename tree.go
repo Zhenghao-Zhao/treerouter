@@ -2,13 +2,17 @@ package treerouter
 
 import (
 	"net/http"
+	"strings"
+	"unicode"
 )
+
+type requestMethods map[string]*node
 
 type node struct {
 	path string
 
 	// only endpoint node has at least one handlers
-	handlers []Chainable
+	handlers []chainable
 	children map[byte]*node
 
 	// each node has at most one param child and one wildcard child
@@ -19,28 +23,27 @@ type node struct {
 	paramNames []string
 }
 
-type MethodRoot map[string]*node
+type routeValue struct {
+	params  map[string]string
+	handler http.Handler
+	tsr     bool
+}
 
-func NewMethodRoot() MethodRoot {
+func newMethodRoot() requestMethods {
 	initPath := "/"
-	return MethodRoot{
-		http.MethodGet:     NewNode(initPath),
-		http.MethodPost:    NewNode(initPath),
-		http.MethodPatch:   NewNode(initPath),
-		http.MethodDelete:  NewNode(initPath),
-		http.MethodOptions: NewNode(initPath),
+	return requestMethods{
+		http.MethodGet:    newNode(initPath),
+		http.MethodPost:   newNode(initPath),
+		http.MethodPut:    newNode(initPath),
+		http.MethodPatch:  newNode(initPath),
+		http.MethodDelete: newNode(initPath),
 	}
 }
 
-func NewNode(path string) *node {
+func newNode(path string) *node {
 	return &node{
 		path: path,
 	}
-}
-
-type routeValue struct {
-	params       map[string]string
-	handlerChain HandlerChain
 }
 
 // returns the length of the longest common substring between s1 and s2
@@ -55,7 +58,7 @@ func longestCommonString(s1, s2 string) int {
 	return i
 }
 
-// get the first param name in the path, return the substring start and end indexes
+// get the first param name in the path, return its start and end indexes including ':' or '*'
 func getFirstParam(path string) (int, int) {
 	start, end := -1, -1
 	for i := range path {
@@ -86,7 +89,7 @@ func (n *node) isLeaf() bool {
 	return len(n.handlers) > 0
 }
 
-func (n *node) addNode(path string, handlers ...Chainable) {
+func (n *node) addNode(path string, handlers ...chainable) {
 	// list of param names in the path
 	paramNames := make([]string, 0)
 
@@ -147,7 +150,8 @@ func (n *node) addNode(path string, handlers ...Chainable) {
 	n.paramNames = paramNames
 }
 
-func (n *node) insertChild(path string, handlers []Chainable, paramNames []string) {
+// insertChild adds node that has no common path with the parent node
+func (n *node) insertChild(path string, handlers []chainable, paramNames []string) {
 	for {
 		start, end := getFirstParam(path)
 		if start == -1 {
@@ -198,7 +202,6 @@ func (n *node) addChild(c *node) {
 		n.paramChild = c
 		return
 	}
-
 	if c.path == "*" {
 		n.wildChild = c
 		return
@@ -213,83 +216,135 @@ func (n *node) match(path string) *routeValue {
 	return n.matchRoute(path, []string{})
 }
 
-// match routes recursively
-func (n *node) matchRoute(path string, paramValues []string) *routeValue {
-	if n.path == ":" {
-		start := 0
-		for start < len(path) && path[start] != '/' {
-			start++
-		}
-		paramValues = append(paramValues, path[:start])
-		if start == len(path) {
-			if n.isLeaf() {
-				paramNames := n.paramNames
-				params := make(map[string]string)
-				for i, name := range paramNames {
-					params[name] = paramValues[i]
-				}
+func newRouteValue(n *node, paramVals []string, tsr bool) *routeValue {
+	if !n.isLeaf() {
+		return nil
+	}
 
-				return &routeValue{
-					params:       params,
-					handlerChain: NewHandlerChain(n.handlers...),
-				}
-			}
-			return nil
+	if len(n.paramNames) != len(paramVals) {
+		panic("missing param name(s) or param val(s)")
+	}
+
+	params := make(map[string]string)
+	for i := range len(n.paramNames) {
+		params[n.paramNames[i]] = paramVals[i]
+	}
+
+	return &routeValue{
+		params:  params,
+		handler: newHandlerChain(n.handlers...),
+		tsr:     tsr,
+	}
+}
+
+func (n *node) matchRoute(path string, paramValues []string) *routeValue {
+	l, k := len(n.path), len(path)
+	if n.path == ":" {
+		// find the index at the next '/' or EOL of path
+		end := 0
+		for end < len(path) && path[end] != '/' {
+			end++
 		}
-		path = path[start:]
-		if k, exists := n.children[path[0]]; exists {
-			n = k
+		paramValues = append(paramValues, path[:end])
+		path = path[end:]
+	} else if l <= k && n.path == path[:l] {
+		path = path[l:]
+	} else {
+		if l == k+1 && n.path[:k] == path && n.path[k] == '/' {
+			return newRouteValue(n, paramValues, true)
+		}
+		return nil
+	}
+
+	if len(path) == 0 {
+		return newRouteValue(n, paramValues, false)
+	}
+	if node, exists := n.children[path[0]]; exists {
+		if v := node.matchRoute(path, paramValues); v != nil {
+			return v
+		}
+	} else if path == "/" {
+		return newRouteValue(n, paramValues, true)
+	}
+
+	// if no matching segments found try matching parameter nodes first
+	if n.paramChild != nil {
+		if v := n.paramChild.matchRoute(path, paramValues); v != nil {
+			return v
 		}
 	}
 
-	l := len(n.path)
-	if l <= len(path) && path[:l] == n.path {
+	if n.wildChild != nil {
+		v := newRouteValue(n.wildChild, paramValues, false)
+		// set wildcard param name to "*"
+		v.params["*"] = path
+		return v
+	}
+
+	return nil
+}
+
+func (n *node) findCaseInsensitivePath(path string, tsr bool) (string, bool) {
+	buffer := make([]byte, 0, len(path)+1)
+	result := n.findCaseInsensitivePathRec(path, buffer, tsr)
+
+	if result == nil {
+		return "", false
+	}
+
+	return string(result), true
+}
+
+func (n *node) findCaseInsensitivePathRec(path string, buffer []byte, tsr bool) []byte {
+	l, k := len(n.path), len(path)
+	if n.path == ":" {
+		// find the index at the next '/' or EOL of path
+		end := 0
+		for end < len(path) && path[end] != '/' {
+			end++
+		}
+		buffer = append(buffer, []byte(path[:end])...)
+		path = path[end:]
+	} else if l <= k && strings.EqualFold(n.path, path[:l]) {
+		buffer = append(buffer, []byte(n.path)...)
 		path = path[l:]
-		if path == "" {
-			if n.isLeaf() {
-				paramNames := n.paramNames
-				params := make(map[string]string)
-				for i, name := range paramNames {
-					params[name] = paramValues[i]
-				}
-
-				return &routeValue{
-					params:       params,
-					handlerChain: NewHandlerChain(n.handlers...),
-				}
-			}
-			return nil
+	} else {
+		if tsr && l == k+1 && strings.EqualFold(n.path[:k], path) && n.path[k] == '/' {
+			buffer = append(buffer, []byte(n.path[:k])...)
+			return buffer
 		}
+		return nil
+	}
 
-		// prioritise matching non parameter/wildcard nodes first
-		if k, exists := n.children[path[0]]; exists {
-			if v := k.matchRoute(path, paramValues); v != nil {
-				return v
-			}
+	if len(path) == 0 {
+		return buffer
+	}
+
+	lower := byte(unicode.ToLower(rune(path[0])))
+	upper := byte(unicode.ToUpper(rune(path[0])))
+	if node, exists := n.children[lower]; exists {
+		if v := node.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
+			return v
 		}
-
-		// if no matching segments found try matching parameter nodes first
-		if n.paramChild != nil {
-			if v := n.paramChild.matchRoute(path, paramValues); v != nil {
-				return v
-			}
+	} else if node, exists := n.children[upper]; exists {
+		if v := node.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
+			return v
 		}
+	} else if tsr && path == "/" {
+		return buffer
+	}
 
-		// match wildcard child last as it has lowest priority
-		if n.wildChild != nil {
-			paramNames := n.wildChild.paramNames
-			params := make(map[string]string)
-			for i, name := range paramNames {
-				params[name] = paramValues[i]
-			}
-
-			// set wildcard param name to "*"
-			params["*"] = path
-			return &routeValue{
-				params:       params,
-				handlerChain: NewHandlerChain(n.wildChild.handlers...),
-			}
+	// if no matching segments found try matching parameter nodes first
+	if n.paramChild != nil {
+		if v := n.paramChild.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
+			return v
 		}
+	}
+
+	// match wildcard child last as it has lowest priority
+	if n.wildChild != nil {
+		buffer = append(buffer, []byte(path)...)
+		return buffer
 	}
 
 	return nil

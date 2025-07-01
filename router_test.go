@@ -57,6 +57,10 @@ func createRequest(method, url string, headers ...header) *http.Request {
 func TestRouteFormats(t *testing.T) {
 	router := NewRouter()
 
+	router.GET("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("home"))
+	})
+
 	router.GET("users", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("users"))
 	})
@@ -69,14 +73,20 @@ func TestRouteFormats(t *testing.T) {
 		w.Write([]byte("posts"))
 	})
 
+	router.GET("userName/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("username"))
+	})
+
 	server := httptest.NewServer(router)
 	defer server.Close()
 
 	testCases := []testCase{
+		{request: createRequest(http.MethodGet, server.URL), expected: "home"},
 		{request: createRequest(http.MethodGet, server.URL+"/users/"), expected: "users"},
 		{request: createRequest(http.MethodGet, server.URL+"/profiles"), expected: "profiles"},
 		{request: createRequest(http.MethodGet, server.URL+"/posts"), expected: "posts"},
 		{request: createRequest(http.MethodGet, server.URL+"/posts?id=1"), expected: "posts"},
+		{request: createRequest(http.MethodGet, server.URL+"/username"), expected: "username"},
 	}
 
 	test(t, testCases)
@@ -91,11 +101,13 @@ func TestMixedRoutes(t *testing.T) {
 		w.Write([]byte(param))
 	})
 
+	// the previous catch-all route should be overriden by the following route
 	groupUser.GET("/:name/*", func(w http.ResponseWriter, r *http.Request) {
 		param := GetParam(r, "*")
 		w.Write([]byte(param))
 	})
 
+	// static segment after /:name has higher priority therefore should override catch-all segment
 	groupUser.GET("/:name/id", func(w http.ResponseWriter, r *http.Request) {
 		paramVal := GetParam(r, "name")
 		w.Write([]byte(paramVal))
