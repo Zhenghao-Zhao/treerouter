@@ -6,7 +6,12 @@ import (
 	"unicode"
 )
 
-type requestMethods map[string]*node
+type routes []route
+
+type route struct {
+	method string
+	node   *node
+}
 
 type node struct {
 	path string
@@ -24,20 +29,29 @@ type node struct {
 }
 
 type routeValue struct {
-	params  map[string]string
-	handler http.Handler
-	tsr     bool
+	params       map[string]string
+	handlerChain http.Handler
+	tsr          bool
 }
 
-func newMethodRoot() requestMethods {
+func newMethodRoot() routes {
 	initPath := "/"
-	return requestMethods{
-		http.MethodGet:    newNode(initPath),
-		http.MethodPost:   newNode(initPath),
-		http.MethodPut:    newNode(initPath),
-		http.MethodPatch:  newNode(initPath),
-		http.MethodDelete: newNode(initPath),
+	return routes{
+		route{method: http.MethodGet, node: newNode(initPath)},
+		route{method: http.MethodPost, node: newNode(initPath)},
+		route{method: http.MethodPut, node: newNode(initPath)},
+		route{method: http.MethodPatch, node: newNode(initPath)},
+		route{method: http.MethodDelete, node: newNode(initPath)},
 	}
+}
+
+func (m routes) get(method string) *node {
+	for _, methodNode := range m {
+		if methodNode.method == method {
+			return methodNode.node
+		}
+	}
+	return nil
 }
 
 func newNode(path string) *node {
@@ -231,9 +245,9 @@ func newRouteValue(n *node, paramVals []string, tsr bool) *routeValue {
 	}
 
 	return &routeValue{
-		params:  params,
-		handler: newHandlerChain(n.handlers...),
-		tsr:     tsr,
+		params:       params,
+		handlerChain: newHandlerChain(n.handlers...),
+		tsr:          tsr,
 	}
 }
 
@@ -320,8 +334,8 @@ func (n *node) findCaseInsensitivePathRec(path string, buffer []byte, tsr bool) 
 		return buffer
 	}
 
-	lower := byte(unicode.ToLower(rune(path[0])))
 	upper := byte(unicode.ToUpper(rune(path[0])))
+	lower := byte(unicode.ToLower(rune(path[0])))
 	if node, exists := n.children[lower]; exists {
 		if v := node.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
 			return v

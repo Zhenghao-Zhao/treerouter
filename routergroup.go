@@ -9,14 +9,14 @@ type RouterGroup struct {
 	BasePath string
 	Handlers []chainable
 
-	Methods requestMethods
+	Routes routes
 }
 
-func NewGroup(basePath string, methods requestMethods, handlers ...chainable) *RouterGroup {
+func NewGroup(basePath string, methods routes, handlers ...chainable) *RouterGroup {
 	return &RouterGroup{
 		BasePath: basePath,
 		Handlers: handlers,
-		Methods:  methods,
+		Routes:   methods,
 	}
 }
 
@@ -25,7 +25,7 @@ func (group *RouterGroup) Bind(path string) *RouterGroup {
 	newGroup := &RouterGroup{
 		BasePath: joinPaths(group.BasePath, path),
 		Handlers: group.Handlers,
-		Methods:  group.Methods,
+		Routes:   group.Routes,
 	}
 
 	return newGroup
@@ -38,38 +38,38 @@ func (group *RouterGroup) Use(middlewares ...chainable) {
 // GET is a helper function for creating Get route in treerouter
 func (group *RouterGroup) GET(path string, handler http.HandlerFunc) *RouterGroup {
 	combinedPath := group.addRoute(path, http.MethodGet, handler)
-	return NewGroup(combinedPath, group.Methods)
+	return NewGroup(combinedPath, group.Routes)
 }
 
 // POST is a helper function for creating Post route in treerouter
 func (group *RouterGroup) POST(path string, handler http.HandlerFunc) *RouterGroup {
 	combinedPath := group.addRoute(path, http.MethodPost, handler)
-	return NewGroup(combinedPath, group.Methods)
+	return NewGroup(combinedPath, group.Routes)
 }
 
 // PUT is a helper function for creating Put route in treerouter
 func (group *RouterGroup) PUT(path string, handler http.HandlerFunc) *RouterGroup {
 	combinedPath := group.addRoute(path, http.MethodPut, handler)
-	return NewGroup(combinedPath, group.Methods)
+	return NewGroup(combinedPath, group.Routes)
 }
 
 // PATCH is a helper function for creating Patch route in treerouter
 func (group *RouterGroup) PATCH(path string, handler http.HandlerFunc) *RouterGroup {
 	combinedPath := group.addRoute(path, http.MethodPatch, handler)
-	return NewGroup(combinedPath, group.Methods)
+	return NewGroup(combinedPath, group.Routes)
 }
 
 // DELETE is a helper function for creating Delete route in treerouter
 func (group *RouterGroup) DELETE(path string, handler http.HandlerFunc) *RouterGroup {
 	combinedPath := group.addRoute(path, http.MethodDelete, handler)
-	return NewGroup(combinedPath, group.Methods)
+	return NewGroup(combinedPath, group.Routes)
 }
 
 func (group *RouterGroup) addRoute(relativePath, method string, handler http.HandlerFunc) string {
-	methodRoot, exists := group.Methods[method]
 	combinedPath := joinPaths(group.BasePath, relativePath)
 	combinedHandlers := append(group.Handlers, newChainable(handler))
-	if exists {
+	methodRoot := group.Routes.get(method)
+	if methodRoot != nil {
 		methodRoot.addNode(combinedPath, combinedHandlers...)
 	}
 

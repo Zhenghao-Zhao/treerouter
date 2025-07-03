@@ -6,41 +6,25 @@ import (
 	"strings"
 )
 
-const (
-	mGet int = iota
-	mPost
-	mPut
-	mPatch
-	mDelete
-)
-
 type Router struct {
 	*RouterGroup
-	Methods               requestMethods
-	RedirectTrailingSlash bool
-	RedirectFixedPath     bool
-	RemoveExtraSlash      bool
-}
-
-var methodOrder = map[string]int{
-	http.MethodGet:    mGet,
-	http.MethodPost:   mPost,
-	http.MethodPut:    mPut,
-	http.MethodPatch:  mPatch,
-	http.MethodDelete: mDelete,
+	RedirectTrailingSlash  bool
+	RedirectFixedPath      bool
+	RemoveExtraSlash       bool
+	HandleMethodNotAllowed bool
 }
 
 func NewRouter() *Router {
-	methods := newMethodRoot()
+	routes := newMethodRoot()
 	return &Router{
 		RouterGroup: &RouterGroup{
 			BasePath: "/",
-			Methods:  methods,
+			Routes:   routes,
 		},
-		Methods:               methods,
-		RedirectTrailingSlash: true,
-		RedirectFixedPath:     false,
-		RemoveExtraSlash:      false,
+		RedirectTrailingSlash:  false,
+		RedirectFixedPath:      false,
+		RemoveExtraSlash:       false,
+		HandleMethodNotAllowed: false,
 	}
 }
 
@@ -49,63 +33,66 @@ func (router *Router) NewGroup(path string) *RouterGroup {
 }
 
 func (router *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var handler http.Handler
 	rPath := r.URL.Path
 
 	if router.RemoveExtraSlash {
 		rPath = path.Clean(rPath)
 	}
-	methodNode, exists := router.Methods[r.Method]
-	if !exists {
-		handler = router.methodNotAllowedHandler()
-		goto handle
+
+	route := router.Routes.get(r.Method)
+	if route != nil {
+		if routeValue := route.match(rPath); routeValue != nil {
+			// if there is no trailing slash mismatch it means an exact match has been found
+			if !routeValue.tsr {
+				r = AddParams(r, routeValue.params)
+				routeValue.handlerChain.ServeHTTP(w, r)
+				return
+			}
+			if router.RedirectTrailingSlash {
+				redirectTrailingSlash(w, r)
+				return
+			}
+		}
+
+		// if a route is not found, try finding case insensitive matches
+		if router.RedirectFixedPath {
+			if path, ok := route.findCaseInsensitivePath(rPath, router.RedirectFixedPath); ok {
+				r.URL.Path = path
+				redirectRoute(w, r)
+				return
+			}
+		}
 	}
 
-	if routeValue := methodNode.match(rPath); routeValue != nil {
-		if !routeValue.tsr {
-			r = AddParams(r, routeValue.params)
-			handler = routeValue.handler
-			goto handle
-		}
-		if !router.RedirectTrailingSlash {
-			handler = http.NotFoundHandler()
-			goto handle
-		}
-		redirectTrailingSlash(w, r)
+	if router.HandleMethodNotAllowed {
+		router.methodNotAllowedHandler().ServeHTTP(w, r)
 		return
 	}
 
-	if router.RedirectFixedPath {
-		if p, ok := methodNode.findCaseInsensitivePath(rPath, router.RedirectFixedPath); ok {
-			r.URL.Path = p
-			redirectRoute(w, r)
-			return
-		}
-		handler = http.NotFoundHandler()
-	}
-
-handle:
-	if handler != nil {
-		handler.ServeHTTP(w, r)
-	}
+	http.NotFoundHandler().ServeHTTP(w, r)
 }
 
-func (router *Router) methodNotAllowedHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		allowedMethods := make([]string, 0, len(methodOrder))
+func (router *Router) methodNotAllowedHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allowedMethods := make([]string, 0, len(router.Routes))
 		p := r.URL.Path
-		for method, methodNode := range router.Methods {
-			if method == r.Method {
+		for _, methodNode := range router.Routes {
+			if methodNode.method == r.Method {
 				continue
 			}
 
-			if result := methodNode.match(p); result != nil {
-				allowedMethods = append(allowedMethods, method)
+			if result := methodNode.node.match(p); result != nil {
+				allowedMethods = append(allowedMethods, methodNode.method)
 			}
 		}
-		w.Header().Set("Allow", strings.Join(allowedMethods, ","))
-		http.Error(w, "405 method not allowed", http.StatusMethodNotAllowed)
-	}
+
+		if len(allowedMethods) > 0 {
+			w.Header().Set("Allow", strings.Join(allowedMethods, ", "))
+			http.Error(w, "405 method not allowed", http.StatusMethodNotAllowed)
+		} else {
+			http.NotFoundHandler().ServeHTTP(w, r)
+		}
+	})
 }
 
 func redirectTrailingSlash(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +115,7 @@ func redirectTrailingSlash(w http.ResponseWriter, r *http.Request) {
 }
 
 func redirectRoute(w http.ResponseWriter, r *http.Request) {
-	// set 301 status for Get requests, 308 for non-get requests
+	// set 301 status for Get requests, 308 for non-Get requests
 	code := http.StatusMovedPermanently
 	if r.Method != http.MethodGet {
 		code = http.StatusPermanentRedirect

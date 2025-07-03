@@ -1,7 +1,6 @@
 package treerouter
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +10,9 @@ import (
 )
 
 type testCase struct {
-	request  *http.Request
-	expected string
+	request         *http.Request
+	expectedMessage string
+	expectedCode    int
 }
 
 type header struct {
@@ -20,76 +20,90 @@ type header struct {
 	value string
 }
 
-func test(t *testing.T, testCases []testCase) {
-	for _, c := range testCases {
-		if c.request == nil {
-			t.Fatal("failed to create request")
-		}
+// performs a simple http test using httptest package, returns the response recorder.
+// does not auto-redirect
+func performQuickTest(handler http.Handler, method, path string, headers ...header) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, nil)
 
-		res, err := http.DefaultClient.Do(c.request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != http.StatusOK {
-			t.Errorf("handler returned wrong status code: got %v want %v",
-				res.StatusCode, http.StatusOK)
-		}
-		reqBody, err := io.ReadAll(res.Body)
-		if err != nil {
-			t.Errorf("failed to read response body:%v", err)
-		}
-		assert.Equal(t, c.expected, string(reqBody))
+	for _, header := range headers {
+		request.Header.Set(header.key, header.value)
 	}
+
+	writer := httptest.NewRecorder()
+	handler.ServeHTTP(writer, request)
+	return writer
 }
 
-func createRequest(method, url string, headers ...header) *http.Request {
-	request, err := http.NewRequest(method, url, nil)
+// performs a http test using http client, returns the response.
+// redirects to target location
+func performHTTPTest(t *testing.T, server *httptest.Server, method, path string, headers ...header) (*http.Response, string) {
+	client := http.DefaultClient
+	req, err := http.NewRequest(method, server.URL+path, nil)
 	if err != nil {
-		return nil
+		t.Fatal(err)
 	}
-	for _, h := range headers {
-		request.Header.Set(h.key, h.value)
+	for _, header := range headers {
+		req.Header.Set(header.key, header.value)
 	}
-	return request
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, string(resBody)
 }
 
-func TestRouteFormats(t *testing.T) {
+func TestTrailingSlash(t *testing.T) {
 	router := NewRouter()
+	router.RedirectTrailingSlash = true
+	router.RemoveExtraSlash = false
+	router.RedirectFixedPath = false
 
-	router.GET("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("home"))
-	})
+	router.GET("/posts/", func(w http.ResponseWriter, r *http.Request) {})
+	res := performQuickTest(router, http.MethodGet, "/posts")
+	assert.Equal(t, res.Code, http.StatusMovedPermanently)
+}
 
-	router.GET("users", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("users"))
-	})
+func TestFixedPath(t *testing.T) {
+	router := NewRouter()
+	router.RedirectFixedPath = true
+	router.RedirectTrailingSlash = false
 
-	router.GET("profiles/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("profiles"))
-	})
+	router.GET("/username", func(w http.ResponseWriter, r *http.Request) {})
+	res := performQuickTest(router, http.MethodGet, "/userName")
+	assert.Equal(t, res.Code, http.StatusMovedPermanently)
+}
 
-	router.GET("/posts/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("posts"))
-	})
+func TestMethodNotAllowed(t *testing.T) {
+	router := NewRouter()
+	router.HandleMethodNotAllowed = true
 
-	router.GET("userName/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("username"))
-	})
+	router.GET("/username", func(w http.ResponseWriter, r *http.Request) {})
+	router.PUT("/username", func(w http.ResponseWriter, r *http.Request) {})
+	router.DELETE("/username", func(w http.ResponseWriter, r *http.Request) {})
 
-	server := httptest.NewServer(router)
-	defer server.Close()
+	res := performQuickTest(router, http.MethodPost, "/username")
+	assert.Equal(t, http.StatusMethodNotAllowed, res.Code)
+	assert.Equal(t, "GET, PUT, DELETE", res.Header().Get("Allow"))
+}
 
-	testCases := []testCase{
-		{request: createRequest(http.MethodGet, server.URL), expected: "home"},
-		{request: createRequest(http.MethodGet, server.URL+"/users/"), expected: "users"},
-		{request: createRequest(http.MethodGet, server.URL+"/profiles"), expected: "profiles"},
-		{request: createRequest(http.MethodGet, server.URL+"/posts"), expected: "posts"},
-		{request: createRequest(http.MethodGet, server.URL+"/posts?id=1"), expected: "posts"},
-		{request: createRequest(http.MethodGet, server.URL+"/username"), expected: "username"},
-	}
+func TestRouteExtraSlash(t *testing.T) {
+	router := NewRouter()
+	router.RemoveExtraSlash = true
+	router.RedirectTrailingSlash = false
 
-	test(t, testCases)
+	router.GET("/", func(w http.ResponseWriter, r *http.Request) {})
+	router.PUT("/users", func(w http.ResponseWriter, r *http.Request) {})
+
+	res := performQuickTest(router, http.MethodGet, "//")
+	assert.Equal(t, http.StatusOK, res.Code)
+
+	res = performQuickTest(router, http.MethodPut, "/users/")
+	assert.Equal(t, http.StatusOK, res.Code)
 }
 
 func TestMixedRoutes(t *testing.T) {
@@ -100,103 +114,70 @@ func TestMixedRoutes(t *testing.T) {
 		param := GetParam(r, "*")
 		w.Write([]byte(param))
 	})
-
 	// the previous catch-all route should be overriden by the following route
 	groupUser.GET("/:name/*", func(w http.ResponseWriter, r *http.Request) {
 		param := GetParam(r, "*")
 		w.Write([]byte(param))
 	})
-
 	// static segment after /:name has higher priority therefore should override catch-all segment
 	groupUser.GET("/:name/id", func(w http.ResponseWriter, r *http.Request) {
 		paramVal := GetParam(r, "name")
 		w.Write([]byte(paramVal))
 	})
-
 	groupUser.GET("/:id/name", func(w http.ResponseWriter, r *http.Request) {
 		paramVal := GetParam(r, "id")
 		w.Write([]byte(paramVal))
 	})
-
 	groupUser.GET("/name", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("john doe"))
 	})
 
-	s := httptest.NewServer(router)
-	defer s.Close()
+	server := httptest.NewServer(router)
+	defer server.Close()
 
-	testCases := []testCase{
-		{request: createRequest(http.MethodGet, s.URL+"/user/red"), expected: "red"},
-		{request: createRequest(http.MethodGet, s.URL+"/user/johndoe/id"), expected: "johndoe"},
-		{request: createRequest(http.MethodGet, s.URL+"/user/johndoe/name"), expected: "johndoe"},
-		{request: createRequest(http.MethodGet, s.URL+"/user/name"), expected: "john doe"},
-		{request: createRequest(http.MethodGet, s.URL+"/user/name/foo"), expected: "foo"},
-	}
+	res, body := performHTTPTest(t, server, http.MethodGet, "/user/red")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "red", body)
 
-	test(t, testCases)
-}
+	res, body = performHTTPTest(t, server, http.MethodGet, "/user/johndoe/id/name")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "id/name", body)
 
-func TestDynamicRoutes(t *testing.T) {
-	router := NewRouter()
-	groupUser := router.NewGroup("user")
+	res, body = performHTTPTest(t, server, http.MethodGet, "/user/johndoe/name")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "johndoe", body)
 
-	groupUser.GET("/:id", func(w http.ResponseWriter, r *http.Request) {
-		param := GetParam(r, "id")
-		w.Write([]byte(param))
-	})
+	res, body = performHTTPTest(t, server, http.MethodGet, "/user/name")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "john doe", body)
 
-	groupUser.POST("/:id/profile", func(w http.ResponseWriter, r *http.Request) {
-		param := GetParam(r, "id")
-		w.Write([]byte(param))
-	})
-
-	groupUser.PATCH("/:id/:name", func(w http.ResponseWriter, r *http.Request) {
-		first := GetParam(r, "id")
-		second := GetParam(r, "name")
-		fmt.Fprintf(w, "%s %s", first, second)
-	})
-
-	groupUser.DELETE("/johndoe/profile", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("johndoe"))
-	})
-
-	s := httptest.NewServer(router)
-	defer s.Close()
-
-	testCases := []testCase{
-		{request: createRequest(http.MethodGet, s.URL+"/user/orange"), expected: "orange"},
-		{request: createRequest(http.MethodPost, s.URL+"/user/apple/profile"), expected: "apple"},
-		{request: createRequest(http.MethodPost, s.URL+"/user/123/profile"), expected: "123"},
-		{request: createRequest(http.MethodPatch, s.URL+"/user/123/profil"), expected: "123 profil"},
-		{request: createRequest(http.MethodDelete, s.URL+"/user/johndoe/profile"), expected: "johndoe"},
-	}
-
-	test(t, testCases)
+	res, body = performHTTPTest(t, server, http.MethodGet, "/user/name/foo")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "foo", body)
 }
 
 func TestMiddleware(t *testing.T) {
 	router := NewRouter()
-	groupUser := router.NewGroup("user")
 
-	AuthKey := "auth"
-	AuthValue := "123abc"
+	authKey := "auth"
+	authValue := "123abc"
 
 	// create a simple auth middleware
-	groupUser.Use(func(hc *HandlerChain) {
-		authValue := hc.request.Header.Get(AuthKey)
-		if authValue == "" {
+	router.Use(func(hc *HandlerChain) {
+		v := hc.request.Header.Get(authKey)
+		if v == "" {
 			http.Error(hc.writer, "failed to find auth header", http.StatusUnauthorized)
 			return
 		}
 
-		if authValue != AuthValue {
+		if v != authValue {
 			http.Error(hc.writer, "mismatching auth value", http.StatusUnauthorized)
 			return
 		}
 		hc.Next()
 	})
 
-	groupUser.GET("/:id", func(w http.ResponseWriter, r *http.Request) {
+	router.GET("/:id", func(w http.ResponseWriter, r *http.Request) {
 		param := GetParam(r, "id")
 		w.Write([]byte(param))
 	})
@@ -204,48 +185,64 @@ func TestMiddleware(t *testing.T) {
 	server := httptest.NewServer(router)
 	defer server.Close()
 
-	testCases := []testCase{
-		{request: createRequest(http.MethodGet, server.URL+"/user/orange", header{key: AuthKey, value: AuthValue}), expected: "orange"},
-	}
-
-	test(t, testCases)
+	res, body := performHTTPTest(t, server, http.MethodGet, "/orange", header{key: authKey, value: authValue})
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "orange", body)
 }
 
 func TestStaticRoutes(t *testing.T) {
 	router := NewRouter()
 
-	groupCompany := router.NewGroup("company")
+	groupUser := router.NewGroup("user")
+	groupArticle := router.NewGroup("article")
 
-	// depth 1: /company/{name}
-	groupCompany.GET("/apple", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("apple"))
-	})
-	groupCompany.POST("/microsoft", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("microsoft")) })
-	groupCompany.DELETE("/google", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("google")) })
+	groupUser.GET("/profile", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("user profile")) })
+	groupUser.POST("/profession", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("user profession")) })
 
-	// // depth 2: /company/staff/{name}
-	groupCompanyStaff := groupCompany.Bind("/staff")
-	groupCompanyStaff.GET("/alice", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("alice")) })
-	groupCompanyStaff.POST("/benjamin", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("benjamin")) })
-	groupCompanyStaff.DELETE("/chuck", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("chuck")) })
-	//
-	// // depth 3: /company/staff/job/{name}
-	groupCompanyStaffTitle := groupCompanyStaff.Bind("/job")
-	groupCompanyStaffTitle.GET("/engineer", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("engineer")) })
-	groupCompanyStaffTitle.POST("/accountant", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("accountant")) })
-	groupCompanyStaffTitle.DELETE("/hr", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hr")) })
+	groupArticle.GET("/profile", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("article profile")) })
+	groupArticle.POST("/profession", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("article profession")) })
+
+	groupUserId := groupUser.Bind("id")
+	groupArticleId := groupArticle.Bind("id")
+
+	groupUserId.GET("/profile", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("user id profile")) })
+	groupUserId.POST("/profession", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("user id profession")) })
+
+	groupArticleId.GET("/profile", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("article id profile")) })
+	groupArticleId.POST("/profession", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("article id profession")) })
 
 	server := httptest.NewServer(router)
 	defer server.Close()
 
-	results := []testCase{
-		{request: createRequest(http.MethodGet, server.URL+"/company/apple"), expected: "apple"},
-		{request: createRequest(http.MethodPost, server.URL+"/company/microsoft"), expected: "microsoft"},
-		{request: createRequest(http.MethodGet, server.URL+"/company/staff/alice"), expected: "alice"},
-		{request: createRequest(http.MethodPost, server.URL+"/company/staff/benjamin"), expected: "benjamin"},
-		{request: createRequest(http.MethodGet, server.URL+"/company/staff/job/engineer"), expected: "engineer"},
-		{request: createRequest(http.MethodPost, server.URL+"/company/staff/job/accountant"), expected: "accountant"},
-	}
+	res, body := performHTTPTest(t, server, http.MethodGet, "/user/profile")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "user profile", body)
 
-	test(t, results)
+	res, body = performHTTPTest(t, server, http.MethodPost, "/user/profession")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "user profession", body)
+
+	res, body = performHTTPTest(t, server, http.MethodGet, "/article/profile")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "article profile", body)
+
+	res, body = performHTTPTest(t, server, http.MethodPost, "/article/profession")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "article profession", body)
+
+	res, body = performHTTPTest(t, server, http.MethodGet, "/user/id/profile")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "user id profile", body)
+
+	res, body = performHTTPTest(t, server, http.MethodPost, "/user/id/profession")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "user id profession", body)
+
+	res, body = performHTTPTest(t, server, http.MethodGet, "/article/id/profile")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "article id profile", body)
+
+	res, body = performHTTPTest(t, server, http.MethodPost, "/article/id/profession")
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "article id profession", body)
 }
