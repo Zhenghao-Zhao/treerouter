@@ -44,7 +44,7 @@ func (router *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if routeValue := route.match(rPath); routeValue != nil {
 			// if there is no trailing slash mismatch it means an exact match has been found
 			if !routeValue.tsr {
-				r = AddParams(r, routeValue.params)
+				r = addParams(r, routeValue.params)
 				routeValue.handlerChain.ServeHTTP(w, r)
 				return
 			}

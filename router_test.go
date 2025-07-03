@@ -34,6 +34,26 @@ func performQuickTest(handler http.Handler, method, path string, headers ...head
 	return writer
 }
 
+func performRedirectTest(handler http.Handler, method, path string, headers ...header) (*httptest.ResponseRecorder, *httptest.ResponseRecorder) {
+	// perform initial request
+	request := httptest.NewRequest(method, path, nil)
+	for _, header := range headers {
+		request.Header.Set(header.key, header.value)
+	}
+	writer := httptest.NewRecorder()
+	handler.ServeHTTP(writer, request)
+
+	// perform redirected request
+	newPath := writer.Header().Get("Location")
+	if newPath == "" {
+		return writer, nil
+	}
+	request = httptest.NewRequest(method, newPath, nil)
+	writerR := httptest.NewRecorder()
+	handler.ServeHTTP(writerR, request)
+	return writer, writerR
+}
+
 // performs a http test using http client, returns the response.
 // redirects to target location
 func performHTTPTest(t *testing.T, server *httptest.Server, method, path string, headers ...header) (*http.Response, string) {
@@ -71,11 +91,20 @@ func TestTrailingSlash(t *testing.T) {
 func TestFixedPath(t *testing.T) {
 	router := NewRouter()
 	router.RedirectFixedPath = true
-	router.RedirectTrailingSlash = false
+	router.RedirectTrailingSlash = true
 
 	router.GET("/username", func(w http.ResponseWriter, r *http.Request) {})
-	res := performQuickTest(router, http.MethodGet, "/userName")
+	router.GET("/proFile/nAME", func(w http.ResponseWriter, r *http.Request) {})
+
+	res, resR := performRedirectTest(router, http.MethodGet, "/userName")
 	assert.Equal(t, res.Code, http.StatusMovedPermanently)
+	assert.Equal(t, res.Header().Get("Location"), "/username")
+	assert.Equal(t, resR.Code, http.StatusOK)
+
+	res, resR = performRedirectTest(router, http.MethodGet, "/profile/name/")
+	assert.Equal(t, res.Code, http.StatusMovedPermanently)
+	assert.Equal(t, res.Header().Get("Location"), "/proFile/nAME")
+	assert.Equal(t, resR.Code, http.StatusOK)
 }
 
 func TestMethodNotAllowed(t *testing.T) {

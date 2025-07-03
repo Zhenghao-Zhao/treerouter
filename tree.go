@@ -330,22 +330,22 @@ func (n *node) findCaseInsensitivePathRec(path string, buffer []byte, tsr bool) 
 		return nil
 	}
 
-	if len(path) == 0 {
+	if len(path) == 0 || (tsr && path == "/") {
 		return buffer
 	}
 
-	upper := byte(unicode.ToUpper(rune(path[0])))
 	lower := byte(unicode.ToLower(rune(path[0])))
 	if node, exists := n.children[lower]; exists {
 		if v := node.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
 			return v
 		}
-	} else if node, exists := n.children[upper]; exists {
+	}
+
+	upper := byte(unicode.ToUpper(rune(path[0])))
+	if node, exists := n.children[upper]; exists {
 		if v := node.findCaseInsensitivePathRec(path, buffer, tsr); v != nil {
 			return v
 		}
-	} else if tsr && path == "/" {
-		return buffer
 	}
 
 	// if no matching segments found try matching parameter nodes first
