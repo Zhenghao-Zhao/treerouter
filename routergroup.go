@@ -2,7 +2,6 @@ package treerouter
 
 import (
 	"net/http"
-	"path"
 )
 
 type RouterGroup struct {
@@ -73,31 +72,5 @@ func (group *RouterGroup) addRoute(relativePath, method string, handler http.Han
 		methodRoot.addNode(combinedPath, combinedHandlers...)
 	}
 
-	return combinedPath
-}
-
-func lastChar(s string) byte {
-	if s == "" {
-		panic("path cannot be empty")
-	}
-
-	return s[len(s)-1]
-}
-
-// joins absolute path with relative path while preserving end slash
-func joinPaths(absolutePath, relativePath string) string {
-	if relativePath == "" {
-		return absolutePath
-	}
-
-	combinedPath := path.Join(absolutePath, relativePath)
-
-	if combinedPath[0] != '/' {
-		combinedPath = "/" + combinedPath
-	}
-
-	if lastChar(relativePath) == '/' && lastChar(combinedPath) != '/' {
-		return combinedPath + "/"
-	}
 	return combinedPath
 }

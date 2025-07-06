@@ -14,7 +14,7 @@ type Router struct {
 	HandleMethodNotAllowed bool
 }
 
-func NewRouter() *Router {
+func New() *Router {
 	routes := newMethodRoot()
 	return &Router{
 		RouterGroup: &RouterGroup{

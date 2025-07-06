@@ -78,7 +78,7 @@ func performHTTPTest(t *testing.T, server *httptest.Server, method, path string,
 }
 
 func TestTrailingSlash(t *testing.T) {
-	router := NewRouter()
+	router := New()
 	router.RedirectTrailingSlash = true
 	router.RemoveExtraSlash = false
 	router.RedirectFixedPath = false
@@ -91,7 +91,7 @@ func TestTrailingSlash(t *testing.T) {
 }
 
 func TestFixedPath(t *testing.T) {
-	router := NewRouter()
+	router := New()
 	router.RedirectFixedPath = true
 	router.RedirectTrailingSlash = true
 
@@ -110,7 +110,7 @@ func TestFixedPath(t *testing.T) {
 }
 
 func TestMethodNotAllowed(t *testing.T) {
-	router := NewRouter()
+	router := New()
 	router.HandleMethodNotAllowed = true
 
 	router.GET("/username", func(w http.ResponseWriter, r *http.Request) {})
@@ -123,7 +123,7 @@ func TestMethodNotAllowed(t *testing.T) {
 }
 
 func TestRouteExtraSlash(t *testing.T) {
-	router := NewRouter()
+	router := New()
 	router.RemoveExtraSlash = true
 	router.RedirectTrailingSlash = false
 
@@ -138,7 +138,7 @@ func TestRouteExtraSlash(t *testing.T) {
 }
 
 func TestMixedRoutes(t *testing.T) {
-	router := NewRouter()
+	router := New()
 	groupUser := router.NewGroup("user")
 
 	groupUser.GET("/*", func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +188,7 @@ func TestMixedRoutes(t *testing.T) {
 }
 
 func TestMiddleware(t *testing.T) {
-	router := NewRouter()
+	router := New()
 
 	authKey := "auth"
 	authValue := "123abc"
@@ -222,7 +222,7 @@ func TestMiddleware(t *testing.T) {
 }
 
 func TestStaticRoutes(t *testing.T) {
-	router := NewRouter()
+	router := New()
 
 	groupUser := router.NewGroup("user")
 	groupArticle := router.NewGroup("article")
