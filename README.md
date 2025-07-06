@@ -30,22 +30,23 @@ The purpose of treerouter is to mainly serve as a template router for people to 
 Adding a middleware to the router and attaching a handler:
 ```go
 func AuthMiddleware(hc *HandlerChain) {
-v := hc.request.Header.Get(authKey)
-if v != authValue {
-http.Error(hc.writer, "mismatching auth value", http.StatusUnauthorized)
-return
-}
-hc.Next()
+  v := hc.request.Header.Get(authKey)
+  if v != authValue {
+    http.Error(hc.writer, "mismatching auth value", http.StatusUnauthorized)
+    return  
+  }
+  hc.Next()
 }
 func HelloHandler(w http.ResponseWriter, r *http.Request) {
-param := GetParam(r, "name")
-w.Write([]byte("hello, " + param))
+  param := GetParam(r, "name")
+  w.Write([]byte("hello, " + param))
 }
 func main() {
-// r is implicitly a route group
-r := treerouter.New()
-r.Use(AuthMiddleware)
-r.GET("/hello/:name", HelloHandler)
+  // r is implicitly a route group
+  r := treerouter.New()
+  r.Use(AuthMiddleware)
+  r.GET("/hello/:name", HelloHandler)
+}
 ```
 ## Pattern matching
 ```
