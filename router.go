@@ -7,7 +7,7 @@ import (
 )
 
 type Router struct {
-	*RouterGroup
+	*RouteGroup
 	RedirectTrailingSlash  bool
 	RedirectFixedPath      bool
 	RemoveExtraSlash       bool
@@ -17,9 +17,9 @@ type Router struct {
 func New() *Router {
 	routes := newMethodRoot()
 	return &Router{
-		RouterGroup: &RouterGroup{
+		RouteGroup: &RouteGroup{
 			BasePath: "/",
-			Routes:   routes,
+			routes:   routes,
 		},
 		RedirectTrailingSlash:  false,
 		RedirectFixedPath:      false,
@@ -28,7 +28,7 @@ func New() *Router {
 	}
 }
 
-func (router *Router) NewGroup(path string) *RouterGroup {
+func (router *Router) NewGroup(path string) *RouteGroup {
 	return router.Bind(path)
 }
 
@@ -39,13 +39,13 @@ func (router *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rPath = path.Clean(rPath)
 	}
 
-	route := router.Routes.get(r.Method)
+	route := router.routes.get(r.Method)
 	if route != nil {
 		if routeValue := route.match(rPath); routeValue != nil {
 			// if there is no trailing slash mismatch it means an exact match has been found
 			if !routeValue.tsr {
 				r = addParams(r, routeValue.params)
-				routeValue.handlerChain.ServeHTTP(w, r)
+				routeValue.handler.ServeHTTP(w, r)
 				return
 			}
 			if router.RedirectTrailingSlash {
@@ -74,9 +74,9 @@ func (router *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (router *Router) methodNotAllowedHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		allowedMethods := make([]string, 0, len(router.Routes))
+		allowedMethods := make([]string, 0, len(router.routes))
 		p := r.URL.Path
-		for _, methodNode := range router.Routes {
+		for _, methodNode := range router.routes {
 			if methodNode.method == r.Method {
 				continue
 			}

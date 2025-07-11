@@ -16,8 +16,8 @@ type route struct {
 type node struct {
 	path string
 
-	// only endpoint node has at least one handlers
-	handlers []chainable
+	// only endpoint node has at least one handler
+	handler  http.Handler
 	children map[byte]*node
 
 	// each node has at most one param child and one wildcard child
@@ -29,9 +29,9 @@ type node struct {
 }
 
 type routeValue struct {
-	params       map[string]string
-	handlerChain http.Handler
-	tsr          bool
+	params  map[string]string
+	handler http.Handler
+	tsr     bool
 }
 
 func newMethodRoot() routes {
@@ -100,10 +100,10 @@ func getFirstParam(path string) (int, int) {
 }
 
 func (n *node) isLeaf() bool {
-	return len(n.handlers) > 0
+	return n.handler != nil
 }
 
-func (n *node) addNode(path string, handlers ...chainable) {
+func (n *node) addNode(path string, handlers http.Handler) {
 	// list of param names in the path
 	paramNames := make([]string, 0)
 
@@ -114,7 +114,7 @@ func (n *node) addNode(path string, handlers ...chainable) {
 		if l < len(n.path) {
 			newNode := &node{
 				path:       n.path[l:],
-				handlers:   n.handlers,
+				handler:    n.handler,
 				children:   n.children,
 				paramChild: n.paramChild,
 				wildChild:  n.wildChild,
@@ -126,7 +126,7 @@ func (n *node) addNode(path string, handlers ...chainable) {
 			n.children = map[byte]*node{
 				newNode.path[0]: newNode,
 			}
-			n.handlers = nil
+			n.handler = nil
 			n.paramNames = nil
 		}
 		if path[0] == ':' {
@@ -160,18 +160,18 @@ func (n *node) addNode(path string, handlers ...chainable) {
 		n.insertChild(path, handlers, paramNames)
 		return
 	}
-	n.handlers = handlers
+	n.handler = handlers
 	n.paramNames = paramNames
 }
 
 // insertChild adds node that has no common path with the parent node
-func (n *node) insertChild(path string, handlers []chainable, paramNames []string) {
+func (n *node) insertChild(path string, handlers http.Handler, paramNames []string) {
 	for {
 		start, end := getFirstParam(path)
 		if start == -1 {
 			n.addChild(&node{
 				path:       path,
-				handlers:   handlers,
+				handler:    handlers,
 				paramNames: paramNames,
 			})
 			return
@@ -203,7 +203,7 @@ func (n *node) insertChild(path string, handlers []chainable, paramNames []strin
 
 		if end == len(path) {
 			dynamNode.paramNames = paramNames
-			dynamNode.handlers = handlers
+			dynamNode.handler = handlers
 			return
 		}
 		n = dynamNode
@@ -239,15 +239,19 @@ func newRouteValue(n *node, paramVals []string, tsr bool) *routeValue {
 		panic("missing param name(s) or param val(s)")
 	}
 
+	if n.handler == nil {
+		panic("missing handler")
+	}
+
 	params := make(map[string]string)
 	for i := range len(n.paramNames) {
 		params[n.paramNames[i]] = paramVals[i]
 	}
 
 	return &routeValue{
-		params:       params,
-		handlerChain: newHandlerChain(n.handlers...),
-		tsr:          tsr,
+		params:  params,
+		handler: n.handler,
+		tsr:     tsr,
 	}
 }
 

@@ -29,11 +29,11 @@ func (c HandlerChain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.Next()
 }
 
-func newHandlerChain(chainables ...chainable) HandlerChain {
+func NewHandlerChain(chainables ...chainable) HandlerChain {
 	return HandlerChain{Handlers: chainables, index: -1}
 }
 
-func newChainable(h http.HandlerFunc) chainable {
+func NewChainable(h http.HandlerFunc) chainable {
 	return func(hc *HandlerChain) {
 		h(hc.writer, hc.request)
 	}
